@@ -20,6 +20,57 @@
 
 package com.xmlcalabash.core;
 
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.reflect.Constructor;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.HashMap;
+import java.util.Hashtable;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Stack;
+import java.util.Vector;
+import java.util.logging.Logger;
+
+import javax.xml.transform.URIResolver;
+import javax.xml.transform.sax.SAXSource;
+
+import com.xmlcalabash.util.Input;
+import com.xmlcalabash.util.Output;
+import net.sf.saxon.Configuration;
+import net.sf.saxon.lib.ExtensionFunctionDefinition;
+import net.sf.saxon.s9api.ExtensionFunction;
+import net.sf.saxon.s9api.Processor;
+import net.sf.saxon.s9api.QName;
+import net.sf.saxon.s9api.SaxonApiException;
+import net.sf.saxon.s9api.Serializer;
+import net.sf.saxon.s9api.XdmDestination;
+import net.sf.saxon.s9api.XdmNode;
+import net.sf.saxon.s9api.XsltCompiler;
+import net.sf.saxon.s9api.XsltExecutable;
+import net.sf.saxon.s9api.XsltTransformer;
+
+import org.apache.http.client.CookieStore;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.utils.HttpClientUtils;
+import org.apache.http.impl.client.BasicCookieStore;
+import org.apache.http.impl.client.StandardHttpRequestRetryHandler;
+import org.apache.http.impl.client.SystemDefaultHttpClient;
+import org.xml.sax.EntityResolver;
+import org.xml.sax.InputSource;
+
 import com.xmlcalabash.config.XProcConfigurer;
 import com.xmlcalabash.functions.BaseURI;
 import com.xmlcalabash.functions.Cwd;
@@ -31,8 +82,12 @@ import com.xmlcalabash.functions.SystemProperty;
 import com.xmlcalabash.functions.ValueAvailable;
 import com.xmlcalabash.functions.VersionAvailable;
 import com.xmlcalabash.functions.XPathVersionAvailable;
+import com.xmlcalabash.functions.XProcExtensionFunctionDefinition;
 import com.xmlcalabash.io.ReadableData;
 import com.xmlcalabash.io.ReadablePipe;
+import com.xmlcalabash.model.DeclareStep;
+import com.xmlcalabash.model.Parser;
+import com.xmlcalabash.model.PipelineLibrary;
 import com.xmlcalabash.runtime.XLibrary;
 import com.xmlcalabash.runtime.XPipeline;
 import com.xmlcalabash.runtime.XRootStep;
@@ -40,37 +95,13 @@ import com.xmlcalabash.runtime.XStep;
 import com.xmlcalabash.util.DefaultXProcConfigurer;
 import com.xmlcalabash.util.DefaultXProcMessageListener;
 import com.xmlcalabash.util.JSONtoXML;
+import com.xmlcalabash.util.S9apiUtils;
 import com.xmlcalabash.util.StepErrorListener;
 import com.xmlcalabash.util.TreeWriter;
-import net.sf.saxon.Configuration;
-import net.sf.saxon.lib.ExtensionFunctionDefinition;
-import net.sf.saxon.s9api.Processor;
-import net.sf.saxon.s9api.QName;
-import net.sf.saxon.s9api.XdmNode;
-import net.sf.saxon.s9api.SaxonApiException;
-import com.xmlcalabash.model.Parser;
-import com.xmlcalabash.model.DeclareStep;
-import com.xmlcalabash.model.PipelineLibrary;
-import com.xmlcalabash.util.XProcURIResolver;
 import com.xmlcalabash.util.URIUtils;
+import com.xmlcalabash.util.XProcURIResolver;
 
-import java.lang.reflect.Constructor;
-import java.util.logging.Logger;
-import java.util.Hashtable;
-import java.util.Vector;
-import java.util.GregorianCalendar;
-import java.util.Locale;
-import java.io.FileNotFoundException;
-import java.net.URISyntaxException;
-import java.net.URI;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-
-import javax.xml.transform.URIResolver;
-
-import org.apache.commons.httpclient.Cookie;
-import org.xml.sax.EntityResolver;
-import org.xml.sax.InputSource;
+import static java.lang.String.format;
 
 /**
  *
@@ -82,17 +113,16 @@ public class XProcRuntime {
     private Parser parser = null;
     private XProcURIResolver uriResolver = null;
     private XProcConfiguration config = null;
-    private Vector<XStep> reported = new Vector<XStep> ();
     private QName errorCode = null;
     private XdmNode errorNode = null;
     private String errorMessage = null;
     private Hashtable<QName, DeclareStep> declaredSteps = new Hashtable<QName,DeclareStep> ();
     private DeclareStep pipeline = null;
     private XPipeline xpipeline = null;
-    private Vector<Throwable> errors = null;
     private static String episode = null;
     private Hashtable<String,Vector<XdmNode>> collections = null;
     private URI staticBaseURI = null;
+    private URI baseURI = null;
     private boolean allowGeneralExpressions = true;
     private boolean allowXPointerOnText = true;
     private boolean transparentJSON = false;
@@ -103,9 +133,19 @@ public class XProcRuntime {
     private XProcMessageListener msgListener = null;
     private PipelineLibrary standardLibrary = null;
     private XLibrary xStandardLibrary = null;
-    private Hashtable<String,Vector<Cookie>> cookieHash = new Hashtable<String,Vector<Cookie>> ();
+    private HttpClient httpClient;
+    private Map<String, CookieStore> cookieStores;
     private XProcConfigurer configurer = null;
     private String htmlParser = null;
+    private Vector<XProcExtensionFunctionDefinition> exFuncs = new Vector<XProcExtensionFunctionDefinition>();
+
+    private Output profile = null;
+    private Hashtable<XStep,Calendar> profileHash = null;
+    private TreeWriter profileWriter = null;
+    private QName profileProfile = new QName("http://xmlcalabash.com/ns/profile", "profile");
+    private QName profileType = new QName("", "type");
+    private QName profileName = new QName("", "name");
+    private QName profileTime = new QName("http://xmlcalabash.com/ns/profile", "time");
 
     public XProcRuntime(XProcConfiguration config) {
         this.config = config;
@@ -114,8 +154,8 @@ public class XProcRuntime {
         if (config.xprocConfigurer != null) {
             try {
                 String className = config.xprocConfigurer;
-                Constructor constructor = Class.forName(className).getConstructor(XProcRuntime.class);
-                configurer = (XProcConfigurer) constructor.newInstance(this);
+                Constructor<? extends XProcConfigurer> constructor = Class.forName(className).asSubclass(XProcConfigurer.class).getConstructor(XProcRuntime.class);
+                configurer = constructor.newInstance(this);
             } catch (Exception e) {
                 throw new XProcException(e);
             }
@@ -125,16 +165,20 @@ public class XProcRuntime {
 
         xprocData = new XProcData(this);
 
-        processor.registerExtensionFunction(new Cwd(this));
-        processor.registerExtensionFunction(new BaseURI(this));
-        processor.registerExtensionFunction(new ResolveURI(this));
-        processor.registerExtensionFunction(new SystemProperty(this));
-        processor.registerExtensionFunction(new StepAvailable(this));
-        processor.registerExtensionFunction(new IterationSize(this));
-        processor.registerExtensionFunction(new IterationPosition(this));
-        processor.registerExtensionFunction(new ValueAvailable(this));
-        processor.registerExtensionFunction(new VersionAvailable(this));
-        processor.registerExtensionFunction(new XPathVersionAvailable(this));
+        exFuncs.add(new Cwd(this));
+        exFuncs.add(new BaseURI(this));
+        exFuncs.add(new ResolveURI(this));
+        exFuncs.add(new SystemProperty(this));
+        exFuncs.add(new StepAvailable(this));
+        exFuncs.add(new IterationSize(this));
+        exFuncs.add(new IterationPosition(this));
+        exFuncs.add(new ValueAvailable(this));
+        exFuncs.add(new VersionAvailable(this));
+        exFuncs.add(new XPathVersionAvailable(this));
+
+        for (XProcExtensionFunctionDefinition xf : exFuncs) {
+            processor.registerExtensionFunction(xf);
+        }
 
         log = Logger.getLogger(this.getClass().getName());
 
@@ -145,14 +189,14 @@ public class XProcRuntime {
 
         try {
             if (config.uriResolver != null) {
-                uriResolver.setUnderlyingURIResolver((URIResolver) Class.forName(config.uriResolver).newInstance());
+                uriResolver.setUnderlyingURIResolver(Class.forName(config.uriResolver).asSubclass(URIResolver.class).newInstance());
             }
             if (config.entityResolver != null) {
-                uriResolver.setUnderlyingEntityResolver((EntityResolver) Class.forName(config.entityResolver).newInstance());
+                uriResolver.setUnderlyingEntityResolver(Class.forName(config.entityResolver).asSubclass(EntityResolver.class).newInstance());
             }
 
             if (config.errorListener != null) {
-                msgListener = (XProcMessageListener) Class.forName(config.errorListener).newInstance();
+                msgListener = Class.forName(config.errorListener).asSubclass(XProcMessageListener.class).newInstance();
             } else {
                 msgListener = new DefaultXProcMessageListener();
             }
@@ -171,11 +215,27 @@ public class XProcRuntime {
         jsonFlavor = config.jsonFlavor;
         useXslt10 = config.useXslt10;
 
+        if (config.profile != null) {
+            profile = config.profile;
+            profileHash = new Hashtable<XStep, Calendar> ();
+            profileWriter = new TreeWriter(this);
+            try {
+                profileWriter.startDocument(new URI("http://xmlcalabash.com/output/profile.xml"));
+            } catch (URISyntaxException use) {
+                // nop;
+            }
+        }
+
         for (String className : config.extensionFunctions) {
             try {
-                ExtensionFunctionDefinition def = (ExtensionFunctionDefinition) Class.forName(className).newInstance();
+                Object def = Class.forName(className).newInstance();
                 finer(null, null, "Instantiated: " + className);
-                processor.registerExtensionFunction(def);
+                if (def instanceof ExtensionFunctionDefinition)
+                    processor.registerExtensionFunction((ExtensionFunctionDefinition) def);
+                else if (def instanceof ExtensionFunction)
+                    processor.registerExtensionFunction((ExtensionFunction) def);
+                else
+                    finer(null, null, "Failed to instantiate extension function " + className + " because that class implements neither ExtensionFunction nor ExtensionFunctionDefinition.");
             } catch (NoClassDefFoundError ncdfe) {
                 finer(null, null, "Failed to instantiate extension function: " + className);
             } catch (Exception e) {
@@ -190,7 +250,6 @@ public class XProcRuntime {
 
     public XProcRuntime(XProcRuntime runtime) {
         processor = runtime.processor;
-        parser = runtime.parser;
         uriResolver = runtime.uriResolver;
         config = runtime.config;
         staticBaseURI = runtime.staticBaseURI;
@@ -199,12 +258,41 @@ public class XProcRuntime {
         msgListener = runtime.msgListener;
         standardLibrary = runtime.standardLibrary;
         xStandardLibrary = runtime.xStandardLibrary;
-        cookieHash = runtime.cookieHash;
+        httpClient = runtime.httpClient;
+        cookieStores = runtime.cookieStores;
         configurer = runtime.configurer;
         allowGeneralExpressions = runtime.allowGeneralExpressions;
         allowXPointerOnText = runtime.allowXPointerOnText;
         transparentJSON = runtime.transparentJSON;
         jsonFlavor = runtime.jsonFlavor;
+        profile = runtime.profile;
+
+        exFuncs.add(new Cwd(this));
+        exFuncs.add(new BaseURI(this));
+        exFuncs.add(new ResolveURI(this));
+        exFuncs.add(new SystemProperty(this));
+        exFuncs.add(new StepAvailable(this));
+        exFuncs.add(new IterationSize(this));
+        exFuncs.add(new IterationPosition(this));
+        exFuncs.add(new ValueAvailable(this));
+        exFuncs.add(new VersionAvailable(this));
+        exFuncs.add(new XPathVersionAvailable(this));
+
+        reset();
+    }
+
+    public void resetExtensionFunctions() {
+        for (XProcExtensionFunctionDefinition xf : exFuncs) {
+            processor.registerExtensionFunction(xf);
+        }
+    }
+
+    public void close() {
+        for (XProcExtensionFunctionDefinition xf : exFuncs) {
+            xf.close();
+        }
+        HttpClientUtils.closeQuietly(httpClient);
+        httpClient = null;
     }
 
     public XProcConfigurer getConfigurer() {
@@ -223,8 +311,28 @@ public class XProcRuntime {
         return config.debug;
     }
 
+    public Output getProfile() {
+        return profile;
+    }
+
+    public void setProfile(Output profile) {
+        this.profile = profile;
+    }
+
     public URI getStaticBaseURI() {
         return staticBaseURI;
+    }
+
+    public void setStaticBaseURI(URI staticBaseURI) {
+        this.staticBaseURI = staticBaseURI;
+    }
+
+    public URI getBaseURI() {
+        return baseURI;
+    }
+
+    public void setBaseURI(URI baseURI) {
+        this.baseURI = baseURI;
     }
 
     public String getSendmailHost() {
@@ -262,7 +370,7 @@ public class XProcRuntime {
     public void setMessageListener(XProcMessageListener listener) {
       msgListener = listener;
     }
-    
+
     public void setCollection(URI href, Vector<XdmNode> docs) {
         if (collections == null) {
             collections = new Hashtable<String,Vector<XdmNode>> ();
@@ -351,7 +459,9 @@ public class XProcRuntime {
     }
 
     public String getProductVersion() {
-        return XProcConstants.XPROC_VERSION;
+        String sver = processor.getSaxonProductVersion();
+        String sed = processor.getUnderlyingConfiguration().getEditionCode();
+        return XProcConstants.XPROC_VERSION + " (for Saxon " + sver + "/" + sed + ")";
     }
 
     public String getVendor() {
@@ -386,18 +496,16 @@ public class XProcRuntime {
         return xStandardLibrary;
     }
 
-    private void reset() {
-        reported = new Vector<XStep> ();
+    private synchronized void reset() {
         errorCode = null;
         errorMessage = null;
         declaredSteps = new Hashtable<QName,DeclareStep> ();
         //explicitDeclarations = false;
         pipeline = null;
         xpipeline = null;
-        errors = null;
         episode = null;
         collections = null;
-        cookieHash = new Hashtable<String,Vector<Cookie>> ();
+        cookieStores = new HashMap<String, CookieStore>();
 
         xprocData = new XProcData(this);
 
@@ -415,33 +523,75 @@ public class XProcRuntime {
         } catch (SaxonApiException ex) {
             throw new XProcException(XProcConstants.dynamicError(9), ex);
         }
+
+        if (profile != null) {
+            profileHash = new Hashtable<XStep, Calendar>();
+            profileWriter = new TreeWriter(this);
+            try {
+                profileWriter.startDocument(new URI("http://xmlcalabash.com/output/profile.xml"));
+            } catch (URISyntaxException use) {
+                // nop;
+            }
+        }
     }
 
     // FIXME: This design sucks
-    public XPipeline load(String pipelineURI) throws SaxonApiException {
+    public XPipeline load(Input pipeline) throws SaxonApiException {
+        String uri;
+        switch (pipeline.getKind()) {
+            case URI:
+                uri = pipeline.getUri();
+                break;
+
+            case INPUT_STREAM:
+                uri = pipeline.getInputStreamUri();
+                break;
+
+            default:
+                throw new UnsupportedOperationException(format("Unsupported pipeline kind '%s'", pipeline.getKind()));
+        }
+
         for (String map : config.loaders.keySet()) {
             boolean data = map.startsWith("data:");
             String pattern = map.substring(5);
-            if (pipelineURI.matches(pattern)) {
-                return runPipelineLoader(pipelineURI, config.loaders.get(map), data);
+            if (uri.matches(pattern)) {
+                return runPipelineLoader(pipeline, config.loaders.get(map), data);
             }
         }
 
         try {
-            return _load(pipelineURI);
+            return _load(pipeline);
         } catch (SaxonApiException sae) {
             error(sae);
             throw sae;
         } catch (XProcException xe) {
             error(xe);
             throw xe;
+        } catch (IOException ioe) {
+            error(ioe);
+            throw new XProcException(ioe);
         }
     }
 
-    private XPipeline _load(String pipelineURI) throws SaxonApiException {
+    private XPipeline _load(Input pipelineInput) throws SaxonApiException, IOException {
         reset();
         configurer.getXMLCalabashConfigurer().configRuntime(this);
-        pipeline = parser.loadPipeline(pipelineURI);
+        switch (pipelineInput.getKind()) {
+            case URI:
+                if (baseURI == null) {
+                    pipeline = parser.loadPipeline(pipelineInput.getUri());
+                } else {
+                    pipeline = parser.loadPipeline(pipelineInput.getUri(), baseURI.toASCIIString());
+                }
+                break;
+
+            case INPUT_STREAM:
+                pipeline = parser.loadPipeline(pipelineInput.getInputStream());
+                break;
+
+            default:
+                throw new UnsupportedOperationException(format("Unsupported pipeline kind '%s'", pipelineInput.getKind()));
+        }
         if (errorCode != null) {
             throw new XProcException(errorCode, errorMessage);
         }
@@ -503,29 +653,58 @@ public class XProcRuntime {
     }
 
     // FIXME: This design sucks
-    public XLibrary loadLibrary(String libraryURI) throws SaxonApiException {
+    public XLibrary loadLibrary(Input library) throws SaxonApiException {
+        String libraryURI;
+        switch (library.getKind()) {
+            case URI:
+                libraryURI = library.getUri();
+                break;
+
+            case INPUT_STREAM:
+                libraryURI = library.getInputStreamUri();
+                break;
+
+            default:
+                throw new UnsupportedOperationException(format("Unsupported library kind '%s'", library.getKind()));
+        }
+
         for (String map : config.loaders.keySet()) {
             boolean data = map.startsWith("data:");
             String pattern = map.substring(5);
             if (libraryURI.matches(pattern)) {
-                return runLibraryLoader(libraryURI, config.loaders.get(map), data);
+                return runLibraryLoader(library, config.loaders.get(map), data);
             }
         }
 
         try {
-            return _loadLibrary(libraryURI);
+            return _loadLibrary(library);
         } catch (SaxonApiException sae) {
             error(sae);
             throw sae;
         } catch (XProcException xe) {
             error(xe);
             throw xe;
+        } catch (IOException ioe) {
+            error(ioe);
+            throw new XProcException(ioe);
         }
     }
 
-    private XLibrary _loadLibrary(String libraryURI) throws SaxonApiException {
+    private XLibrary _loadLibrary(Input library) throws SaxonApiException, IOException {
+        PipelineLibrary plibrary;
+        switch (library.getKind()) {
+            case URI:
+                plibrary = parser.loadLibrary(library.getUri());
+                break;
 
-        PipelineLibrary plibrary = parser.loadLibrary(libraryURI);
+            case INPUT_STREAM:
+                plibrary = parser.loadLibrary(library.getInputStream());
+                break;
+
+            default:
+                throw new UnsupportedOperationException(format("Unsupported library kind '%s'", library.getKind()));
+        }
+
         if (errorCode != null) {
             throw new XProcException(errorCode, errorMessage);
         }
@@ -567,35 +746,54 @@ public class XProcRuntime {
         return xlibrary;
     }
 
-    private XPipeline runPipelineLoader(String pipelineURI, String loaderURI, boolean data) throws SaxonApiException {
-        XdmNode pipeDoc = runLoader(pipelineURI, loaderURI, data);
+    private XPipeline runPipelineLoader(Input pipeline, String loaderURI, boolean data) throws SaxonApiException {
+        XdmNode pipeDoc = runLoader(pipeline, loaderURI, data);
         return use(pipeDoc);
     }
 
-    private XLibrary runLibraryLoader(String pipelineURI, String loaderURI, boolean data) throws SaxonApiException {
-        XdmNode libDoc = runLoader(pipelineURI, loaderURI, data);
+    private XLibrary runLibraryLoader(Input library, String loaderURI, boolean data) throws SaxonApiException {
+        XdmNode libDoc = runLoader(library, loaderURI, data);
         return useLibrary(libDoc);
     }
-    
-    private XdmNode runLoader(String pipelineURI, String loaderURI, boolean data) throws SaxonApiException {
+
+    private XdmNode runLoader(Input pipeline, String loaderURI, boolean data) throws SaxonApiException {
         XPipeline loader = null;
 
         try {
-            loader = _load(loaderURI);
+            loader = _load(new Input(loaderURI));
         } catch (SaxonApiException sae) {
             error(sae);
             throw sae;
         } catch (XProcException xe) {
             error(xe);
             throw xe;
+        } catch (IOException ioe) {
+            error(ioe);
+            throw new XProcException(ioe);
         }
 
         XdmNode pipeDoc = null;
-        if (data) {
-            ReadableData rdata = new ReadableData(this, XProcConstants.c_result, getStaticBaseURI().resolve(pipelineURI).toASCIIString(), "text/plain");
-            pipeDoc = rdata.read();
-        } else {
-            pipeDoc = parse(pipelineURI, getStaticBaseURI().toASCIIString());
+        switch (pipeline.getKind()) {
+            case URI:
+                if (data) {
+                    ReadableData rdata = new ReadableData(this, XProcConstants.c_result, getStaticBaseURI().resolve(pipeline.getUri()).toASCIIString(), "text/plain");
+                    pipeDoc = rdata.read();
+                } else {
+                    pipeDoc = parse(pipeline.getUri(), getStaticBaseURI().toASCIIString());
+                }
+                break;
+
+            case INPUT_STREAM:
+                if (data) {
+                    ReadableData rdata = new ReadableData(this, XProcConstants.c_result, pipeline.getInputStream(), "text/plain");
+                    pipeDoc = rdata.read();
+                } else {
+                    pipeDoc = parse(new InputSource(pipeline.getInputStream()));
+                }
+                break;
+
+            default:
+                throw new UnsupportedOperationException(format("Unsupported pipeline kind '%s'", pipeline.getKind()));
         }
 
         loader.clearInputs("source");
@@ -607,9 +805,9 @@ public class XProcRuntime {
         reset();
         return pipeDoc;
     }
-    
+
     public Processor getProcessor() {
-        return processor;        
+        return processor;
     }
 
     public XdmNode parse(String uri, String base) {
@@ -640,26 +838,39 @@ public class XProcRuntime {
         }
     }
 
-    public void clearCookies(String key) {
-        if (cookieHash.containsKey(key)) {
-            cookieHash.get(key).clear();
-        }
+    public synchronized CookieStore getCookieStore(String key) {
+        if (cookieStores.containsKey(key))
+            return cookieStores.get(key);
+        BasicCookieStore cookieStore = new BasicCookieStore();
+        cookieStores.put(key, cookieStore);
+        return cookieStore;
     }
 
-    public void addCookie(String key, Cookie cookie) {
-        if (!cookieHash.containsKey(key)) {
-            cookieHash.put(key, new Vector<Cookie> ());
-        }
-
-        cookieHash.get(key).add(cookie);
-    }
-
-    public Vector<Cookie> getCookies(String key) {
-        if (cookieHash.containsKey(key)) {
-            return cookieHash.get(key);
+    public synchronized void setCookieStore(String key, CookieStore cookieStore) {
+        if (cookieStore == null) {
+            removeCookieStore(key);
         } else {
-            return new Vector<Cookie> ();
+            this.cookieStores.put(key, cookieStore);
         }
+    }
+
+    public synchronized void removeCookieStore(String key) {
+        this.cookieStores.remove(key);
+    }
+
+    public synchronized HttpClient getHttpClient() {
+    	if (this.httpClient == null) {
+            SystemDefaultHttpClient httpClient = new SystemDefaultHttpClient();
+            // Provide custom retry handler is necessary
+            httpClient.setHttpRequestRetryHandler(new StandardHttpRequestRetryHandler(3, false));
+            return this.httpClient = httpClient;
+    	} else {
+    		return httpClient;
+    	}
+    }
+
+    public synchronized void setHttpClient(HttpClient client) {
+        this.httpClient = client;
     }
 
     public QName getErrorCode() {
@@ -715,13 +926,114 @@ public class XProcRuntime {
 
     // ===========================================================
 
-    public void reportStep(XStep step) {
-        reported.add(step);
+    private Stack<XStep> runningSteps = new Stack<XStep>();
+
+    public void start(XStep step) {
+        runningSteps.push(step);
+
+        if (profile == null) {
+            return;
+        }
+
+        boolean first = profileHash.isEmpty();
+
+        Calendar start = GregorianCalendar.getInstance();
+        profileHash.put(step, start);
+        profileWriter.addStartElement(profileProfile);
+
+        if (first) {
+            DateFormat df = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
+            profileWriter.addAttribute(new QName("", "timestamp"), df.format(new Date()));
+            profileWriter.addAttribute(new QName("", "episode"), getEpisode());
+            profileWriter.addAttribute(new QName("", "language"), getLanguage());
+            profileWriter.addAttribute(new QName("", "product-name"), getProductName());
+            profileWriter.addAttribute(new QName("", "product-version"), getProductVersion());
+            profileWriter.addAttribute(new QName("", "product-vendor"), getVendor());
+            profileWriter.addAttribute(new QName("", "product-vendor-uri"), getVendorURI());
+            profileWriter.addAttribute(new QName("", "xproc-version"), getXProcVersion());
+            profileWriter.addAttribute(new QName("", "xpath-version"), getXPathVersion());
+            profileWriter.addAttribute(new QName("", "psvi-supported"), ""+getPSVISupported());
+        }
+
+        String name = step.getType().getClarkName();
+        profileWriter.addAttribute(profileType, name);
+        profileWriter.addAttribute(profileName, step.getStep().getName());
+        profileWriter.startContent();
     }
 
-    public void start(XPipeline pipe) {
+    public XStep runningStep() {
+        return runningSteps.peek();
     }
 
-    public void finish(XPipeline pipe) {
+    public void finish(XStep step) {
+        runningSteps.pop();
+
+        if (profile == null) {
+            return;
+        }
+
+        Calendar start = profileHash.get(step);
+        long time = GregorianCalendar.getInstance().getTimeInMillis() - start.getTimeInMillis();
+        profileHash.remove(step);
+
+        profileWriter.addStartElement(profileTime);
+        profileWriter.startContent();
+        profileWriter.addText("" + time);
+        profileWriter.addEndElement();
+        profileWriter.addEndElement();
+
+        if (profileHash.isEmpty()) {
+            profileWriter.endDocument();
+            XdmNode profile = profileWriter.getResult();
+
+            InputStream xsl = getClass().getResourceAsStream("/etc/patch-profile.xsl");
+            if (xsl == null) {
+                throw new UnsupportedOperationException("Failed to load profile_patch.xsl from JAR file.");
+            }
+
+            try {
+                XsltCompiler compiler = getProcessor().newXsltCompiler();
+                compiler.setSchemaAware(false);
+                XsltExecutable exec = compiler.compile(new SAXSource(new InputSource(xsl)));
+                XsltTransformer transformer = exec.load();
+                transformer.setInitialContextNode(profile);
+                XdmDestination result = new XdmDestination();
+                transformer.setDestination(result);
+                transformer.transform();
+
+                Serializer serializer = new Serializer();
+                serializer.setOutputProperty(Serializer.Property.INDENT, "yes");
+
+                OutputStream outstr = null;
+                switch (this.profile.getKind()) {
+                    case URI:
+                        URI furi = URI.create(this.profile.getUri());
+                        outstr = new FileOutputStream(new File(furi));
+                        break;
+
+                    case OUTPUT_STREAM:
+                        outstr = this.profile.getOutputStream();
+                        break;
+
+                    default:
+                        throw new UnsupportedOperationException(format("Unsupported profile kind '%s'", this.profile.getKind()));
+                }
+
+                serializer.setOutputStream(outstr);
+                S9apiUtils.serialize(this, result.getXdmNode(), serializer);
+                if (!System.out.equals(outstr) && !System.err.equals(outstr)) {
+                    outstr.close();
+                }
+
+                profileWriter = new TreeWriter(this);
+                profileWriter.startDocument(URI.create("http://xmlcalabash.com/output/profile.xml"));
+            } catch (SaxonApiException sae) {
+                throw new XProcException(sae);
+            } catch (FileNotFoundException fnfe) {
+                throw new XProcException(fnfe);
+            } catch (IOException ioe) {
+                throw new XProcException(ioe);
+            }
+        }
     }
 }

@@ -12,6 +12,7 @@ import net.sf.saxon.s9api.*;
 import net.sf.saxon.Configuration;
 import net.sf.saxon.trans.XPathException;
 
+import java.net.URI;
 import java.util.Hashtable;
 import java.util.Vector;
 import java.util.Iterator;
@@ -43,7 +44,7 @@ public class DefaultStep implements XProcStep {
     public static final QName _normalization_form = new QName("", "normalization-form");
     public static final QName _omit_xml_declaration = new QName("", "omit-xml-declaration");
     public static final QName _standalone = new QName("", "standalone");
-    public static final QName _undeclare_prefixes = new QName("", "undeclare_prefixes");
+    public static final QName _undeclare_prefixes = new QName("", "undeclare-prefixes");
     public static final QName _version = new QName("", "version");
 
     private Hashtable<QName,RuntimeValue> options = null;
@@ -61,6 +62,10 @@ public class DefaultStep implements XProcStep {
 
     public XAtomicStep getStep() {
         return step;
+    }
+
+    public static boolean isAvailable() {
+        return true;
     }
 
     public void setInput(String port, ReadablePipe pipe) {
@@ -122,6 +127,13 @@ public class DefaultStep implements XProcStep {
         return options.get(name).getInt();
     }
 
+    public long getOption(QName name, long defaultValue) {
+        if (options == null || !options.containsKey(name)) {
+            return defaultValue;
+        }
+        return options.get(name).getLong();
+    }
+
     public void reset() {
         throw new XProcException("XProcStep implementation must override reset().");
     }
@@ -158,7 +170,6 @@ public class DefaultStep implements XProcStep {
             type = step.getType().getClarkName();
         }
         fine(null, "Running " + type + " " + step.getName());
-        runtime.reportStep(step);
     }
 
     public Serializer makeSerializer() {
@@ -256,7 +267,11 @@ public class DefaultStep implements XProcStep {
 
         try {
             XPathCompiler xcomp = runtime.getProcessor().newXPathCompiler();
-            xcomp.setBaseURI(step.getNode().getBaseURI());
+            URI baseURI = step.getNode().getBaseURI();
+            if (!"".equals(baseURI.toASCIIString())) {
+                xcomp.setBaseURI(baseURI);
+            }
+
             // Extension functions are not available here...
 
             for (QName varname : globals.keySet()) {

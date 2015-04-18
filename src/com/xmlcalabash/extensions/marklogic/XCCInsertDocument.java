@@ -48,6 +48,7 @@ public class XCCInsertDocument extends DefaultStep {
     private static final QName _locale = new QName("","locale");
     private static final QName _uri = new QName("","uri");
     private static final QName _encoding = new QName("encoding");
+    private static final QName _auth_method = new QName("auth-method");
 
     private ReadablePipe source = null;
     private WritablePipe result = null;
@@ -170,6 +171,10 @@ public class XCCInsertDocument extends DefaultStep {
             }
         } catch (Exception e) {
             throw new XProcException(e);
+        }
+
+        if ("basic".equals(getOption(_auth_method, ""))) {
+            contentSource.setAuthenticationPreemptive(true);
         }
 
         Session session;

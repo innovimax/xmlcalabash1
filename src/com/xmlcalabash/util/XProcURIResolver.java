@@ -1,5 +1,10 @@
 package com.xmlcalabash.util;
 
+import net.sf.saxon.lib.ModuleURIResolver;
+import net.sf.saxon.lib.StandardModuleURIResolver;
+import net.sf.saxon.lib.StandardUnparsedTextResolver;
+import net.sf.saxon.lib.UnparsedTextURIResolver;
+import net.sf.saxon.trans.XPathException;
 import org.xml.sax.InputSource;
 import org.xml.sax.EntityResolver;
 import org.xml.sax.SAXException;
@@ -12,9 +17,9 @@ import javax.xml.transform.TransformerException;
 import javax.xml.transform.sax.SAXSource;
 import javax.xml.parsers.SAXParserFactory;
 import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.stream.StreamSource;
 
 import net.sf.saxon.s9api.DocumentBuilder;
-import net.sf.saxon.s9api.Processor;
 import net.sf.saxon.s9api.SaxonApiException;
 import net.sf.saxon.s9api.XdmNode;
 import net.sf.saxon.Configuration;
@@ -22,13 +27,17 @@ import com.xmlcalabash.core.XProcException;
 import com.xmlcalabash.core.XProcConstants;
 import com.xmlcalabash.core.XProcRuntime;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.net.URLConnection;
 import java.util.Hashtable;
 import java.util.logging.Logger;
-import java.io.IOException;
 
 /**
  * Created by IntelliJ IDEA.
@@ -37,12 +46,13 @@ import java.io.IOException;
  * Time: 4:04:27 PM
  * To change this template use File | Settings | File Templates.
  */
-public class XProcURIResolver implements URIResolver, EntityResolver {
+public class XProcURIResolver implements URIResolver, EntityResolver, ModuleURIResolver, UnparsedTextURIResolver {
     private URIResolver uriResolver = null;
     private EntityResolver entityResolver = null;
+    private ModuleURIResolver moduleURIResolver = null;
+    private UnparsedTextURIResolver unparsedTextResolver = null;
     private XProcRuntime runtime = null;
     private Hashtable<String,XdmNode> cache = new Hashtable<String,XdmNode> ();
-    private Logger logger = Logger.getLogger(this.getClass().getName());
     private static boolean useCache = true; // FIXME: this is supposed to be temporary!
 
     public XProcURIResolver(XProcRuntime runtime) {
@@ -50,11 +60,19 @@ public class XProcURIResolver implements URIResolver, EntityResolver {
     }
 
     public void setUnderlyingURIResolver(URIResolver resolver) {
-        this.uriResolver = resolver;
+        uriResolver = resolver;
     }
 
     public void setUnderlyingEntityResolver(EntityResolver resolver) {
-        this.entityResolver = resolver;
+        entityResolver = resolver;
+    }
+
+    public void setUnderlyingUnparsedTextURIResolver(UnparsedTextURIResolver resolver) {
+        unparsedTextResolver = resolver;
+    }
+
+    public void setUnderlyingModuleURIResolver(ModuleURIResolver resolver) {
+        moduleURIResolver = resolver;
     }
 
     public void cache(XdmNode doc, URI baseURI) {
@@ -72,34 +90,35 @@ public class XProcURIResolver implements URIResolver, EntityResolver {
     public Source resolve(String href, String base) throws TransformerException {
         runtime.finest(null,null,"URIResolver(" + href + "," + base + ")");
 
-        try {
-            URI baseURI = new URI(base);
-            String uri = baseURI.resolve(href).toASCIIString();
-            if (cache.containsKey(uri)) {
-                runtime.finest(null ,null,"Returning cached document.");
-                return cache.get(uri).asSource();
+        String uri = null;
+        if (base == null) {
+            try {
+                URL url = new URL(href);
+                uri = url.toURI().toASCIIString();
+            } catch (MalformedURLException mue) {
+                runtime.finest(null,null,"MalformedURLException on " + href);
+            } catch (URISyntaxException use) {
+                runtime.finest(null,null,"URISyntaxException on " + href);
             }
+        } else {
+            try {
+                URI baseURI = new URI(base);
+                uri = baseURI.resolve(href).toASCIIString();
+            } catch (URISyntaxException use) {
+                runtime.finest(null,null,"URISyntaxException resolving base and href: " + base + " : " + href);
+            }
+        }
 
-            /* This is clearly not right because with it you can't even load pipelines from the local disk...
-            if (runtime.getSafeMode() && uri.startsWith("file:")) {
-                throw XProcException.dynamicError(21);
-            }
-            */
-        } catch (URISyntaxException use) {
-            runtime.finest(null,null,"URISyntaxException resolving base and href?");
+        runtime.finest(null,null,"Resolved: " + uri);
+
+        if (cache.containsKey(uri)) {
+            runtime.finest(null ,null,"Returning cached document.");
+            return cache.get(uri).asSource();
         }
 
         if (uriResolver != null) {
-            URL absoluteURI = null;
-
-            // This is an attempt to deal with jar: URIs, pipelines run from inside jar files.
-            try {
-                absoluteURI = new URL(new URL(base), href);
-            } catch (MalformedURLException mue) {
-                throw new XProcException(mue);
-            }
-
-            Source resolved = uriResolver.resolve(absoluteURI.toString(), base);
+            runtime.finest(null,null,"uriResolver.resolve(" + href + "," + base + ")");
+            Source resolved = uriResolver.resolve(href, base);
 
             // FIXME: This is a grotesque hack. This is wrong. Wrong. Wrong.
             // To support caching, XMLResolver (xmlresolver.org) returns a Source even when it hasn't
@@ -110,7 +129,9 @@ public class XProcURIResolver implements URIResolver, EntityResolver {
                 XMLReader reader = ssource.getXMLReader();
                 if (reader == null) {
                     try {
-                        reader = SAXParserFactory.newInstance().newSAXParser().getXMLReader();
+                        SAXParserFactory saxParserFactory = SAXParserFactory.newInstance();
+                        saxParserFactory.setNamespaceAware(true); // Must be namespace aware
+                        reader = saxParserFactory.newSAXParser().getXMLReader();
                         reader.setEntityResolver(this);
                         ssource.setXMLReader(reader);
                     } catch (SAXException se) {
@@ -144,7 +165,9 @@ public class XProcURIResolver implements URIResolver, EntityResolver {
         if (source == null) {
             try {
                 URI baseURI = new URI(base);
-                source = new SAXSource(new InputSource(baseURI.resolve(href).toASCIIString()));
+                URI resURI = baseURI.resolve(href);
+                source = new SAXSource(new InputSource(resURI.toASCIIString()));
+
                 XMLReader reader = ((SAXSource) source).getXMLReader();
                 if (reader == null) {
                     try {
@@ -205,6 +228,10 @@ public class XProcURIResolver implements URIResolver, EntityResolver {
     public InputSource resolveEntity(String publicId, String systemId) throws SAXException, IOException {
         runtime.finest(null,null,"ResolveEntity(" + publicId + "," + systemId + ")");
 
+        if (systemId == null) {
+            return null;
+        }
+
         try {
             URI baseURI = new URI(systemId);
             String uri = baseURI.toASCIIString();
@@ -224,5 +251,24 @@ public class XProcURIResolver implements URIResolver, EntityResolver {
         } else {
             return null;
         }
+    }
+
+    @Override
+    public StreamSource[] resolve(String moduleURI, String baseURI, String[] locations)
+            throws XPathException {
+        if (moduleURIResolver != null) {
+            return moduleURIResolver.resolve(moduleURI, baseURI, locations);
+        }
+        return StandardModuleURIResolver.getInstance().resolve(moduleURI, baseURI, locations);
+    }
+
+    @Override
+    public Reader resolve(URI uri, String encoding, Configuration configuration) throws XPathException {
+        if (unparsedTextResolver == null) {
+            // If there's no resolver, let Saxon do it...
+            unparsedTextResolver = new StandardUnparsedTextResolver();
+        }
+
+        return unparsedTextResolver.resolve(uri, encoding, configuration);
     }
 }

@@ -38,13 +38,8 @@ import com.xmlcalabash.core.XProcRuntime;
  * Implementation of the XSLT system-property() function
  */
 
-public class BaseURI extends ExtensionFunctionDefinition {
+public class BaseURI extends XProcExtensionFunctionDefinition {
     private static StructuredQName funcname = new StructuredQName("p", XProcConstants.NS_XPROC,"base-uri");
-    private ThreadLocal<XProcRuntime> tl_runtime = new ThreadLocal<XProcRuntime>() {
-        protected synchronized XProcRuntime initialValue() {
-            return null;
-        }
-    };
 
     protected BaseURI() {
         // you can't call this one
@@ -83,7 +78,7 @@ public class BaseURI extends ExtensionFunctionDefinition {
     }
 
     private class BaseURICall extends ExtensionFunctionCall {
-        public SequenceIterator call(SequenceIterator[] arguments, XPathContext context) throws XPathException {
+        public SequenceIterator<?> call(SequenceIterator<?>[] arguments, XPathContext context) throws XPathException {
             String baseURI = null;
 
             XProcRuntime runtime = tl_runtime.get();
@@ -95,7 +90,7 @@ public class BaseURI extends ExtensionFunctionDefinition {
             }
 
             if (arguments.length > 0) {
-                SequenceIterator iter = arguments[0];
+                SequenceIterator<?> iter = arguments[0];
                 NodeInfo item = (NodeInfo) iter.next();
                 baseURI = item.getBaseURI();
             } else {

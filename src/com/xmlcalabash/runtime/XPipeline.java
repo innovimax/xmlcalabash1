@@ -35,7 +35,6 @@ public class XPipeline extends XCompoundStep {
     private static final QName _value = new QName("value");
 
     private Hashtable<QName, RuntimeValue> optionsPassedIn = null;
-    private boolean doPhoneHome = false;
 
     public XPipeline(XProcRuntime runtime, Step step, XCompoundStep parent) {
         super(runtime, step, parent);
@@ -140,10 +139,10 @@ public class XPipeline extends XCompoundStep {
         } catch (SaxonApiException ex) {
             runtime.error(ex);
             throw ex;
+        } finally {
+            runtime.finish(this);
+            data.closeFrame();
         }
-        runtime.finish(this);
-
-        data.closeFrame();
     }
 
     private void setupParameters() {

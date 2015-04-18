@@ -84,7 +84,13 @@ public class PipeLogger {
                     stream = System.out;
                 } else {
                     try {
-                        stream = new PrintStream(new File(log.getHref()));
+                        String href = log.getHref().toASCIIString();
+                        if (href.startsWith("file:///")) {
+                            href = href.substring(7);
+                        } else if (href.startsWith("file:/")) {
+                            href = href.substring(5);
+                        }
+                        stream = new PrintStream(new File(href));
                     } catch (FileNotFoundException fnfe) {
                         System.err.println("Failed to create log: " + log.getHref());
                         stream = System.err;
@@ -95,7 +101,7 @@ public class PipeLogger {
                 String dirstr = null;
 
                 if (log.getHref() != null) {
-                    if (log.getHref().getScheme().equals("file")) {
+                    if ((log.getHref().getScheme() == null) || log.getHref().getScheme().equals("file")) {
                         dirstr = log.getHref().getPath();
                     } else {
                         System.err.println("Only file: scheme URIs are supported for directory logging.");
@@ -220,7 +226,7 @@ public class PipeLogger {
                 }
 
                 serializer.setOutputStream(stream);
-                
+
                 stream.println("<!-- Start of Calabash output " + log + " on " + dateTime() + " -->");
 
                 try {

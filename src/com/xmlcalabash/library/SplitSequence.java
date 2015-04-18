@@ -92,29 +92,29 @@ public class SplitSequence extends DefaultStep {
         DocumentSequenceIterator xsi = new DocumentSequenceIterator(); // See below
         xsi.setLast(count);
 
+        XPathCompiler xcomp = runtime.getProcessor().newXPathCompiler();
+        xcomp.setBaseURI(step.getNode().getBaseURI());
+
+        for (String prefix : test.getNamespaceBindings().keySet()) {
+            xcomp.declareNamespace(prefix, test.getNamespaceBindings().get(prefix));
+        }
+
+        XPathExecutable xexec = xcomp.compile(test.getString());
+
+        // From Michael Kay: http://markmail.org/message/vkb2vaq2miylgndu
+        //
+        // Underneath the s9api XPathExecutable is a net.sf.saxon.sxpath.XPathExpression.
+
+        XPathExpression xexpr = xexec.getUnderlyingExpression();
+
         int pos = 0;
         while (source.moreDocuments()) {
             XdmNode doc = source.read();
             pos++;
 
-            Item item = null;
+            Item<?> item = null;
 
             try {
-                XPathCompiler xcomp = runtime.getProcessor().newXPathCompiler();
-                xcomp.setBaseURI(step.getNode().getBaseURI());
-
-                for (String prefix : test.getNamespaceBindings().keySet()) {
-                    xcomp.declareNamespace(prefix, test.getNamespaceBindings().get(prefix));
-                }
-
-                XPathExecutable xexec = xcomp.compile(test.getString());
-
-                // From Michael Kay: http://markmail.org/message/vkb2vaq2miylgndu
-                //
-                // Underneath the s9api XPathExecutable is a net.sf.saxon.sxpath.XPathExpression.
-
-                XPathExpression xexpr = xexec.getUnderlyingExpression();
-
                 // Call createDynamicContext() on this to get an XPathDynamicContext object;
 
                 XPathDynamicContext xdc = xexpr.createDynamicContext(doc.getUnderlyingNode());
@@ -140,7 +140,7 @@ public class SplitSequence extends DefaultStep {
                 // Then evaluate the expression by calling iterate() on the
                 // net.sf.saxon.sxpath.XPathExpression object.
 
-                SequenceIterator results = xexpr.iterate(xdc);
+                SequenceIterator<?> results = xexpr.iterate(xdc);
                 // FIXME: What if the expression returns a sequence?
                 item = results.next();
             } catch (XPathException xe) {

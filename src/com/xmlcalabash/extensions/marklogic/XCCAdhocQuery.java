@@ -51,6 +51,7 @@ public class XCCAdhocQuery extends DefaultStep {
     private static final QName _contentBase = new QName("","content-base");
     private static final QName _wrapper = new QName("","wrapper");
     private static final QName _encoding = new QName("encoding");
+    private static final QName _auth_method = new QName("auth-method");
     private static final QName c_encoding = new QName("c", XProcConstants.NS_XPROC_STEP, "encoding");
 
     private ReadablePipe source = null;
@@ -108,6 +109,10 @@ public class XCCAdhocQuery extends DefaultStep {
             }
         } catch (Exception e) {
             throw new XProcException(e);
+        }
+
+        if ("basic".equals(getOption(_auth_method, ""))) {
+            contentSource.setAuthenticationPreemptive(true);
         }
 
         Session session;

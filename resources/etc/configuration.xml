@@ -163,6 +163,21 @@
 <implementation type="cx:message"
 		class-name="com.xmlcalabash.extensions.Message"/>
 
+<implementation type="cx:rdf-load"
+		class-name="com.xmlcalabash.extensions.RDFLoad"/>
+
+<implementation type="cx:rdfa"
+		class-name="com.xmlcalabash.extensions.RDFa"/>
+
+<implementation type="cx:rdf-store"
+		class-name="com.xmlcalabash.extensions.RDFStore"/>
+
+<implementation type="cx:sparql"
+		class-name="com.xmlcalabash.extensions.Sparql"/>
+
+<implementation type="cx:wait-for-update"
+		class-name="com.xmlcalabash.extensions.WaitForUpdate"/>
+
 <implementation type="cx:pretty-print"
 		class-name="com.xmlcalabash.extensions.PrettyPrint"/>
 
@@ -213,6 +228,15 @@
 
 <implementation type="cx:send-mail"
                 class-name="com.xmlcalabash.extensions.SendMail"/>
+
+<implementation type="cx:compress cx:gzip pxp:compress pxp:gzip"
+		class-name="com.xmlcalabash.extensions.Compress"/>
+
+<implementation type="cx:uncompress cx:gunzip pxp:uncompress pxp:gunzip"
+		class-name="com.xmlcalabash.extensions.Uncompress"/>
+
+<implementation type="pxp:set-base-uri"
+		class-name="com.xmlcalabash.extensions.SetBaseURI"/>
 
 <!-- Fileutils -->
 

@@ -42,13 +42,8 @@ import com.xmlcalabash.model.DeclareStep;
  * Implementation of the XProc p:step-available function
  */
 
-public class StepAvailable extends ExtensionFunctionDefinition {
+public class StepAvailable extends XProcExtensionFunctionDefinition {
     private static StructuredQName funcname = new StructuredQName("p", XProcConstants.NS_XPROC, "step-available");
-    private ThreadLocal<XProcRuntime> tl_runtime = new ThreadLocal<XProcRuntime>() {
-        protected synchronized XProcRuntime initialValue() {
-            return null;
-        }
-    };
 
     protected StepAvailable() {
         // you can't call this one
@@ -89,7 +84,7 @@ public class StepAvailable extends ExtensionFunctionDefinition {
             staticContext = context;
         }
 
-        public SequenceIterator call(SequenceIterator[] arguments, XPathContext context) throws XPathException {
+        public SequenceIterator<?> call(SequenceIterator<?>[] arguments, XPathContext context) throws XPathException {
             StructuredQName stepName = null;
 
             XProcRuntime runtime = tl_runtime.get();
@@ -101,7 +96,7 @@ public class StepAvailable extends ExtensionFunctionDefinition {
             }
 
             try {
-                SequenceIterator iter = arguments[0];
+                SequenceIterator<?> iter = arguments[0];
                 String lexicalQName = iter.next().getStringValue();
                 stepName = StructuredQName.fromLexicalQName(
                      lexicalQName,

@@ -38,13 +38,8 @@ import com.xmlcalabash.core.XProcRuntime;
  * Implementation of the XSLT system-property() function
  */
 
-public class VersionAvailable extends ExtensionFunctionDefinition {
+public class VersionAvailable extends XProcExtensionFunctionDefinition {
     private static StructuredQName funcname = new StructuredQName("p", XProcConstants.NS_XPROC, "version-available");
-    private ThreadLocal<XProcRuntime> tl_runtime = new ThreadLocal<XProcRuntime>() {
-        protected synchronized XProcRuntime initialValue() {
-            return null;
-        }
-    };
 
     protected VersionAvailable() {
         // you can't call this one
@@ -79,8 +74,8 @@ public class VersionAvailable extends ExtensionFunctionDefinition {
     }
 
     private class SystemPropertyCall extends ExtensionFunctionCall {
-        public SequenceIterator call(SequenceIterator[] arguments, XPathContext context) throws XPathException {
-            SequenceIterator iter = arguments[0];
+        public SequenceIterator<?> call(SequenceIterator<?>[] arguments, XPathContext context) throws XPathException {
+            SequenceIterator<?> iter = arguments[0];
 
             XProcRuntime runtime = tl_runtime.get();
             XStep step = runtime.getXProcData().getStep();

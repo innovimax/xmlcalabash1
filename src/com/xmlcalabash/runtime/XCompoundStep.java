@@ -2,7 +2,6 @@ package com.xmlcalabash.runtime;
 
 import com.xmlcalabash.core.XProcRuntime;
 import com.xmlcalabash.core.XProcConstants;
-import com.xmlcalabash.core.XProcException;
 import com.xmlcalabash.core.XProcData;
 import com.xmlcalabash.io.ReadablePipe;
 import com.xmlcalabash.io.WritablePipe;
@@ -12,6 +11,8 @@ import net.sf.saxon.s9api.XdmNode;
 import net.sf.saxon.s9api.QName;
 import net.sf.saxon.s9api.SaxonApiException;
 
+import java.util.Calendar;
+import java.util.GregorianCalendar;
 import java.util.Hashtable;
 import java.util.Vector;
 
@@ -252,24 +253,29 @@ public class XCompoundStep extends XAtomicStep {
             inScopeOptions.put(var.getName(), value);
         }
 
-        for (XStep step : subpipeline) {
-            step.run();
-        }
+        runtime.start(this);
 
-        for (String port : inputs.keySet()) {
-            if (port.startsWith("|")) {
-                String wport = port.substring(1);
-                WritablePipe pipe = outputs.get(wport);
-                for (ReadablePipe reader : inputs.get(port)) {
-                    while (reader.moreDocuments()) {
-                        XdmNode doc = reader.read();
-                        pipe.write(doc);
-                        finest(step.getNode(), "Compound output copy from " + reader + " to " + pipe);
+        try {
+            for (XStep step : subpipeline) {
+                step.run();
+            }
+
+            for (String port : inputs.keySet()) {
+                if (port.startsWith("|")) {
+                    String wport = port.substring(1);
+                    WritablePipe pipe = outputs.get(wport);
+                    for (ReadablePipe reader : inputs.get(port)) {
+                        while (reader.moreDocuments()) {
+                            XdmNode doc = reader.read();
+                            pipe.write(doc);
+                            finest(step.getNode(), "Compound output copy from " + reader + " to " + pipe);
+                        }
                     }
                 }
             }
+        } finally {
+            runtime.finish(this);
+            data.closeFrame();
         }
-
-        data.closeFrame();
     }
 }

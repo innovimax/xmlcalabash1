@@ -75,7 +75,7 @@ public class ValidateWithXSD extends DefaultStep {
     private static final QName _line = new QName("line");
     private static final QName _column = new QName("column");
 
-    private static final Class [] paramTypes = new Class [] {};
+    private static final Class<?>[] paramTypes = new Class<?>[] {};
     private ReadablePipe source = null;
     private ReadablePipe schemas = null;
     private WritablePipe result = null;
@@ -200,7 +200,7 @@ public class ValidateWithXSD extends DefaultStep {
         
         try {
             finer(step.getNode(), "Validating: " + doc.getBaseURI().toASCIIString());
-            validator.validate(new SAXSource(S9apiUtils.xdmToInputSource(runtime, doc)));
+            validator.validate(doc.asSource());
             if (validationException != null) {
                 throw (SaxonApiException) validationException;
             }

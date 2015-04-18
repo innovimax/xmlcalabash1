@@ -152,13 +152,22 @@ public class Unzip extends DefaultStep {
                     XdmNode doc = runtime.parse(isource);
                     result.write(doc);
                 } else {
-                    tree.startDocument(step.getNode().getBaseURI());
+                    boolean storeText = (contentType != null && contentType.startsWith("text/") && charset != null);
+
+                    // There's no point giving the file the URI of the pipeline document.
+                    // This formulation is parallel to the jar scheme.
+                    URI zipURI = URI.create("zip:" + zipFn + "!" + entry.getName());
+
+                    tree.startDocument(zipURI);
                     tree.addStartElement(XProcConstants.c_data);
                     tree.addAttribute(_name,name);
                     tree.addAttribute(_content_type, contentType);
+                    if (!storeText) {
+                        tree.addAttribute(_encoding, "base64");
+                    }
                     tree.startContent();
 
-                    if (contentType != null && contentType.startsWith("text/") && charset != null) {
+                    if (storeText) {
                         InputStreamReader reader = new InputStreamReader(zipFile, charset);
                         int maxlen = 4096;
                         char[] chars = new char[maxlen];

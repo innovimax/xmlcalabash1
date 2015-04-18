@@ -43,13 +43,8 @@ import java.util.Hashtable;
  * Implementation of the XProc p:step-available function
  */
 
-public class ValueAvailable extends ExtensionFunctionDefinition {
+public class ValueAvailable extends XProcExtensionFunctionDefinition {
     private static StructuredQName funcname = new StructuredQName("p", XProcConstants.NS_XPROC, "value-available");
-    private ThreadLocal<XProcRuntime> tl_runtime = new ThreadLocal<XProcRuntime>() {
-        protected synchronized XProcRuntime initialValue() {
-            return null;
-        }
-    };
 
     protected ValueAvailable() {
         // you can't call this one
@@ -90,7 +85,7 @@ public class ValueAvailable extends ExtensionFunctionDefinition {
             staticContext = context;
         }
 
-        public SequenceIterator call(SequenceIterator[] arguments, XPathContext context) throws XPathException {
+        public SequenceIterator<?> call(SequenceIterator<?>[] arguments, XPathContext context) throws XPathException {
             StructuredQName sVarName = null;
 
             XProcRuntime runtime = tl_runtime.get();
@@ -102,7 +97,7 @@ public class ValueAvailable extends ExtensionFunctionDefinition {
             }
 
             try {
-                SequenceIterator iter = arguments[0];
+                SequenceIterator<?> iter = arguments[0];
                 String lexicalQName = iter.next().getStringValue();
                 sVarName = StructuredQName.fromLexicalQName(
                      lexicalQName,
@@ -117,9 +112,9 @@ public class ValueAvailable extends ExtensionFunctionDefinition {
             boolean failIfUnknown = true;
 
             if (arguments.length > 1) {
-                SequenceIterator iter = arguments[1];
+                SequenceIterator<?> iter = arguments[1];
                 iter = iter.next().getTypedValue();
-                Item item = iter.next();
+                Item<?> item = iter.next();
                 failIfUnknown = ((BooleanValue) item).effectiveBooleanValue();
             }
 

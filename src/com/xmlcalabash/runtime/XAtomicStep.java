@@ -12,7 +12,6 @@ import com.xmlcalabash.io.ReadablePipe;
 import com.xmlcalabash.io.WritablePipe;
 import com.xmlcalabash.io.ReadableInline;
 import com.xmlcalabash.io.ReadableDocument;
-import com.xmlcalabash.io.ReadableData;
 import com.xmlcalabash.io.Pipe;
 import com.xmlcalabash.model.RuntimeValue;
 import com.xmlcalabash.model.Step;
@@ -28,6 +27,9 @@ import com.xmlcalabash.model.ComputableValue;
 import com.xmlcalabash.model.NamespaceBinding;
 import com.xmlcalabash.model.DeclareStep;
 import com.xmlcalabash.model.Option;
+import net.sf.saxon.om.InscopeNamespaceResolver;
+import net.sf.saxon.om.NamePool;
+import net.sf.saxon.om.NodeInfo;
 import net.sf.saxon.trans.XPathException;
 import net.sf.saxon.s9api.QName;
 import net.sf.saxon.s9api.SaxonApiException;
@@ -44,12 +46,12 @@ import net.sf.saxon.s9api.XdmSequenceIterator;
 import net.sf.saxon.s9api.XdmDestination;
 import net.sf.saxon.s9api.SaxonApiUncheckedException;
 
+import java.util.Calendar;
+import java.util.GregorianCalendar;
 import java.util.Vector;
 import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.HashSet;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.regex.Matcher;
@@ -79,6 +81,18 @@ public class XAtomicStep extends XStep {
 
     public XCompoundStep getParent() {
         return parent;
+    }
+
+    public boolean hasReadablePipes(String port) {
+        if (inputs.containsKey(port)) {
+            return inputs.get(port).size() > 0;
+        } else {
+            return false;
+        }
+    }
+
+    public boolean hasWriteablePipe(String port) {
+        return outputs.containsKey(port);
     }
 
     public RuntimeValue optionAvailable(QName optName) {
@@ -363,34 +377,38 @@ public class XAtomicStep extends XStep {
         XProcData data = runtime.getXProcData();
         data.openFrame(this);
 
-        xstep.run();
+        runtime.start(this);
+        try {
+            xstep.run();
 
-        // FIXME: Is it sufficient to only do this for atomic steps?
-        String cache = getInheritedExtensionAttribute(XProcConstants.cx_cache);
-        if ("true".equals(cache)) {
-            for (String port : outputs.keySet()) {
-                WritablePipe wpipe = outputs.get(port);
-                // FIXME: Hack. There should be a better way...
-                if (wpipe instanceof Pipe) {
-                    ReadablePipe rpipe = new Pipe(runtime, ((Pipe) wpipe).documents());
-                    rpipe.canReadSequence(true);
-                    rpipe.setReader(step);
-                    while (rpipe.moreDocuments()) {
-                        XdmNode doc = rpipe.read();
-                        runtime.cache(doc, step.getNode().getBaseURI());
+            // FIXME: Is it sufficient to only do this for atomic steps?
+            String cache = getInheritedExtensionAttribute(XProcConstants.cx_cache);
+            if ("true".equals(cache)) {
+                for (String port : outputs.keySet()) {
+                    WritablePipe wpipe = outputs.get(port);
+                    // FIXME: Hack. There should be a better way...
+                    if (wpipe instanceof Pipe) {
+                        ReadablePipe rpipe = new Pipe(runtime, ((Pipe) wpipe).documents());
+                        rpipe.canReadSequence(true);
+                        rpipe.setReader(step);
+                        while (rpipe.moreDocuments()) {
+                            XdmNode doc = rpipe.read();
+                            runtime.cache(doc, step.getNode().getBaseURI());
+                        }
                     }
                 }
+            } else if (!"false".equals(cache) && cache != null) {
+                throw XProcException.dynamicError(19);
             }
-        } else if (!"false".equals(cache) && cache != null) {
-            throw XProcException.dynamicError(19);
-        }
 
-        for (String port : outputs.keySet()) {
-            WritablePipe wpipe = outputs.get(port);
-            wpipe.close(); // Indicate we're done
+            for (String port : outputs.keySet()) {
+                WritablePipe wpipe = outputs.get(port);
+                wpipe.close(); // Indicate we're done
+            }
+        } finally {
+            runtime.finish(this);
+            data.closeFrame();
         }
-
-        data.closeFrame();
     }
 
     public void reportError(XdmNode doc) {
@@ -546,7 +564,13 @@ public class XAtomicStep extends XStep {
         try {
             if (var.getBinding().size() > 0) {
                 Binding binding = var.getBinding().firstElement();
-                ReadablePipe pipe = getPipeFromBinding(binding);
+
+                ReadablePipe pipe = null;
+                if (binding.getBindingType() == Binding.ERROR_BINDING) {
+                    pipe = ((XCatch) this).errorPipe;
+                } else {
+                    pipe = getPipeFromBinding(binding);
+                }
                 doc = pipe.read();
                 if (pipe.moreDocuments()) {
                     throw XProcException.dynamicError(step, 8, "More than one document in context for parameter '" + var.getName() + "'");
@@ -575,6 +599,23 @@ public class XAtomicStep extends XStep {
 
                     for (QName varname : globals.keySet()) {
                         xcomp.declareVariable(varname);
+                    }
+
+                    // Make sure the namespace bindings for evaluating the XPath expr are correct
+                    // FIXME: Surely there's a better way to do this?
+                    Hashtable<String,String> lclnsBindings = new Hashtable<String, String>();
+                    NodeInfo inode = nsbinding.getNode().getUnderlyingNode();
+                    NamePool pool = inode.getNamePool();
+                    InscopeNamespaceResolver inscopeNS = new InscopeNamespaceResolver(inode);
+                    Iterator<?> pfxiter = inscopeNS.iteratePrefixes();
+                    while (pfxiter.hasNext()) {
+                        String nspfx = (String)pfxiter.next();
+                        String nsuri = inscopeNS.getURIForPrefix(nspfx, "".equals(nspfx));
+                        lclnsBindings.put(nspfx, nsuri);
+                    }
+
+                    for (String prefix : lclnsBindings.keySet()) {
+                        xcomp.declareNamespace(prefix, lclnsBindings.get(prefix));
                     }
 
                     XPathExecutable xexec = xcomp.compile(nsbinding.getXPath());
@@ -615,7 +656,14 @@ public class XAtomicStep extends XStep {
                     throw new XProcException(sae);
                 }
             } else if (nsbinding.getNamespaceBindings() != null) {
-                localBindings = nsbinding.getNamespaceBindings();
+                Hashtable<String,String> bindings = nsbinding.getNamespaceBindings();
+                for (String prefix : bindings.keySet()) {
+                    if ("".equals(prefix) || prefix == null) {
+                        // nop; the default namespace never plays a role in XPath expression evaluation
+                    } else {
+                        localBindings.put(prefix,bindings.get(prefix));
+                    }
+                }
             }
 
             // Remove the excluded ones
@@ -650,7 +698,8 @@ public class XAtomicStep extends XStep {
                     value += item.getStringValue();
                 } else {
                     XdmNode node = (XdmNode) item;
-                    if (node.getNodeKind() == XdmNodeKind.ATTRIBUTE) {
+                    if (node.getNodeKind() == XdmNodeKind.ATTRIBUTE
+                            || node.getNodeKind() == XdmNodeKind.NAMESPACE) {
                         value += node.getStringValue();
                     } else {
                         XdmDestination dest = new XdmDestination();
@@ -742,7 +791,14 @@ public class XAtomicStep extends XStep {
 
         try {
             XPathCompiler xcomp = runtime.getProcessor().newXPathCompiler();
-            xcomp.setBaseURI(step.getNode().getBaseURI());
+            URI baseURI = step.getNode().getBaseURI();
+            if (baseURI == null || !baseURI.isAbsolute())  {
+                if (runtime.getBaseURI() != null) {
+                    xcomp.setBaseURI(runtime.getBaseURI().resolve(baseURI));
+                }
+            } else {
+                xcomp.setBaseURI(baseURI);
+            }
 
             for (QName varname : boundOpts.keySet()) {
                 xcomp.declareVariable(varname);

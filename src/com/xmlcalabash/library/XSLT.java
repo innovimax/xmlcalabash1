@@ -19,7 +19,6 @@
 
 package com.xmlcalabash.library;
 
-import java.io.PrintStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Hashtable;
@@ -43,12 +42,9 @@ import com.xmlcalabash.util.TreeWriter;
 import com.xmlcalabash.util.CollectionResolver;
 import com.xmlcalabash.util.S9apiUtils;
 import net.sf.saxon.Configuration;
-import net.sf.saxon.Controller;
-import net.sf.saxon.expr.XPathContext;
 import net.sf.saxon.lib.CollectionURIResolver;
 import net.sf.saxon.lib.OutputURIResolver;
-import net.sf.saxon.lib.TraceListener;
-import net.sf.saxon.om.Item;
+import net.sf.saxon.lib.UnparsedTextURIResolver;
 import net.sf.saxon.s9api.DocumentBuilder;
 import net.sf.saxon.s9api.QName;
 import net.sf.saxon.s9api.XdmDestination;
@@ -63,7 +59,6 @@ import net.sf.saxon.s9api.ValidationMode;
 import net.sf.saxon.s9api.Processor;
 import net.sf.saxon.event.Receiver;
 import com.xmlcalabash.runtime.XAtomicStep;
-import net.sf.saxon.trace.InstructionInfo;
 import org.xml.sax.InputSource;
 
 /**
@@ -192,48 +187,59 @@ public class XSLT extends DefaultStep {
 
         OutputURIResolver uriResolver = config.getOutputURIResolver();
         CollectionURIResolver collectionResolver = config.getCollectionURIResolver();
+        UnparsedTextURIResolver unparsedTextURIResolver = runtime.getResolver();
 
         config.setOutputURIResolver(new OutputResolver());
         config.setCollectionURIResolver(new CollectionResolver(runtime, defaultCollection, collectionResolver));
 
-        XsltCompiler compiler = runtime.getProcessor().newXsltCompiler();
-        compiler.setSchemaAware(processor.isSchemaAware());
-        XsltExecutable exec = compiler.compile(stylesheet.asSource());
-        XsltTransformer transformer = exec.load();
+        XdmDestination result = null;
+        try {
+            XsltCompiler compiler = runtime.getProcessor().newXsltCompiler();
+            compiler.setSchemaAware(processor.isSchemaAware());
+            XsltExecutable exec = compiler.compile(stylesheet.asSource());
+            XsltTransformer transformer = exec.load();
 
-        for (QName name : params.keySet()) {
-            RuntimeValue v = params.get(name);
-            if (runtime.getAllowGeneralExpressions()) {
-                transformer.setParameter(name, v.getValue());
-            } else {
-                transformer.setParameter(name, new XdmAtomicValue(v.getString()));
+            for (QName name : params.keySet()) {
+                RuntimeValue v = params.get(name);
+                if (runtime.getAllowGeneralExpressions()) {
+                    transformer.setParameter(name, v.getValue());
+                } else {
+                    transformer.setParameter(name, new XdmAtomicValue(v.getString()));
+                }
             }
+
+            if (document != null) {
+                transformer.setInitialContextNode(document);
+            }
+            transformer.setMessageListener(new CatchMessages());
+            result = new XdmDestination();
+            transformer.setDestination(result);
+
+            if (initialMode != null) {
+                transformer.setInitialMode(initialMode);
+            }
+
+            if (templateName != null) {
+                transformer.setInitialTemplate(templateName);
+            }
+
+            if (outputBaseURI != null) {
+                transformer.setBaseOutputURI(outputBaseURI);
+                // The following hack works around https://saxonica.plan.io/issues/1724
+                try {
+                    result.setBaseURI(new URI(outputBaseURI));
+                } catch (URISyntaxException use) {
+                    // whatever
+                }
+            }
+
+            transformer.setSchemaValidationMode(ValidationMode.DEFAULT);
+            transformer.getUnderlyingController().setUnparsedTextURIResolver(unparsedTextURIResolver);
+            transformer.transform();
+        } finally {
+            config.setOutputURIResolver(uriResolver);
+            config.setCollectionURIResolver(collectionResolver);
         }
-
-        if (document != null) {
-            transformer.setInitialContextNode(document);
-        }
-        transformer.setMessageListener(new CatchMessages());
-        XdmDestination result = new XdmDestination();
-        transformer.setDestination(result);
-
-        if (initialMode != null) {
-            transformer.setInitialMode(initialMode);
-        }
-
-        if (templateName != null) {
-            transformer.setInitialTemplate(templateName);
-        }
-
-        if (outputBaseURI != null) {
-            transformer.setBaseOutputURI(outputBaseURI);
-        }
-
-        transformer.setSchemaValidationMode(ValidationMode.DEFAULT);
-        transformer.transform();
-
-        config.setOutputURIResolver(uriResolver);
-        config.setCollectionURIResolver(collectionResolver);
 
         XdmNode xformed = result.getXdmNode();
 

@@ -9,6 +9,7 @@ import net.sf.saxon.om.StructuredQName;
 import net.sf.saxon.om.SequenceIterator;
 import com.xmlcalabash.core.XProcRuntime;
 import com.xmlcalabash.core.XProcConstants;
+import com.xmlcalabash.core.XProcData;
 import com.xmlcalabash.core.XProcException;
 import com.xmlcalabash.runtime.XStep;
 import net.sf.saxon.tree.iter.SingletonIterator;
@@ -37,13 +38,8 @@ import net.sf.saxon.value.SequenceType;
  * Implementation of the XProc p:iteration-position function
  */
 
-public class IterationPosition extends ExtensionFunctionDefinition {
+public class IterationPosition extends XProcExtensionFunctionDefinition {
     private static StructuredQName funcname = new StructuredQName("p", XProcConstants.NS_XPROC, "iteration-position");
-    private ThreadLocal<XProcRuntime> tl_runtime = new ThreadLocal<XProcRuntime>() {
-        protected synchronized XProcRuntime initialValue() {
-            return null;
-        }
-    };
 
     protected IterationPosition() {
         // you can't call this one
@@ -78,9 +74,10 @@ public class IterationPosition extends ExtensionFunctionDefinition {
     }
 
     private class IterationPositionCall extends ExtensionFunctionCall {
-        public SequenceIterator call(SequenceIterator[] arguments, XPathContext context) throws XPathException {
+        public SequenceIterator<?> call(SequenceIterator<?>[] arguments, XPathContext context) throws XPathException {
             XProcRuntime runtime = tl_runtime.get();
-            XStep step = runtime.getXProcData().getStep();
+            XProcData data = runtime.getXProcData();
+            XStep step = data.getStep();
             // FIXME: this can't be the best way to do this...
             // step == null in use-when
             if (step != null && !(step instanceof XCompoundStep)) {

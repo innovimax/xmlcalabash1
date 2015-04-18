@@ -48,12 +48,13 @@ import net.sf.saxon.event.NamespaceReducer;
 import net.sf.saxon.event.PipelineConfiguration;
 import net.sf.saxon.Configuration;
 import com.xmlcalabash.core.XProcRuntime;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.Iterator;
 import java.util.Vector;
 import java.util.HashSet;
 import java.net.URI;
-import java.io.StringWriter;
-import java.io.StringReader;
 
 import net.sf.saxon.tree.util.NamespaceIterator;
 import org.xml.sax.InputSource;
@@ -152,6 +153,7 @@ public class S9apiUtils {
     public static void serialize(XProcRuntime xproc, Vector<XdmNode> nodes, Serializer serializer) throws SaxonApiException {
         Processor qtproc = xproc.getProcessor();
         XQueryCompiler xqcomp = qtproc.newXQueryCompiler();
+        xqcomp.setModuleURIResolver(xproc.getResolver());
 
         // Patch suggested by oXygen to avoid errors that result from attempting to serialize
         // a schema-valid document with a schema-naive query
@@ -193,16 +195,14 @@ public class S9apiUtils {
 
     // FIXME: THIS METHOD IS A GROTESQUE HACK!
     public static InputSource xdmToInputSource(XProcRuntime runtime, XdmNode node) throws SaxonApiException {
-        StringWriter sw = new StringWriter();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
         Serializer serializer = new Serializer();
-        serializer.setOutputWriter(sw);
+        serializer.setOutputStream(out);
         serialize(runtime, node, serializer);
-
-        String serxml = sw.toString();
-
-        StringReader sr = new StringReader(serxml);
-        InputSource isource = new InputSource(sr);
-        isource.setSystemId(node.getBaseURI().toASCIIString());
+        InputSource isource = new InputSource(new ByteArrayInputStream(out.toByteArray()));
+        if (node.getBaseURI() != null) {
+            isource.setSystemId(node.getBaseURI().toASCIIString());
+        }
         return isource;
     }
 
@@ -239,9 +239,9 @@ public class S9apiUtils {
             }
 
             if (all) {
-                Iterator<String> pfxiter = inscopeNS.iteratePrefixes();
+                Iterator<?> pfxiter = inscopeNS.iteratePrefixes();
                 while (pfxiter.hasNext()) {
-                    String pfx = pfxiter.next();
+                    String pfx = (String)pfxiter.next();
                     boolean def = ("".equals(pfx));
                     excludeURIs.add(inscopeNS.getURIForPrefix(pfx,def));
                 }
@@ -382,42 +382,35 @@ public class S9apiUtils {
         return (cause != null && cause instanceof XPathException);
     }
 
-    public static
-    boolean isDocument(XdmNode doc) {
-        boolean ok = true;
-
+    public static void assertDocument(XdmNode doc) {
         if (doc.getNodeKind() == XdmNodeKind.DOCUMENT) {
-            ok = S9apiUtils.isDocumentContent(doc.axisIterator(Axis.CHILD));
+            S9apiUtils.assertDocumentContent(doc.axisIterator(Axis.CHILD));
         } else if (doc.getNodeKind() == XdmNodeKind.ELEMENT) {
             // this is ok
         } else {
-            ok = false;
+            throw XProcException.dynamicError(1, "Document root cannot be " + doc.getNodeKind());
         }
-
-        return ok;
     }
 
-    public static
-    boolean isDocumentContent(XdmSequenceIterator iter) {
-        boolean ok = true;
-
+    public static void assertDocumentContent(XdmSequenceIterator iter) {
         int elemCount = 0;
-        while (ok && iter.hasNext()) {
+        while (iter.hasNext()) {
             XdmNode child = (XdmNode) iter.next();
             if (child.getNodeKind() == XdmNodeKind.ELEMENT) {
                 elemCount++;
-                ok = ok && elemCount == 1;
+                if (elemCount > 1) {
+                    throw XProcException.dynamicError(1, "Document must have exactly one top-level element");
+                }
             } else if (child.getNodeKind() == XdmNodeKind.PROCESSING_INSTRUCTION
                     || child.getNodeKind() == XdmNodeKind.COMMENT) {
                 // that's ok
             } else if (child.getNodeKind() == XdmNodeKind.TEXT) {
-                ok = ok && "".equals(child.getStringValue().trim());
+                if (!"".equals(child.getStringValue().trim()))
+                    throw XProcException.dynamicError(1, "Only whitespace text nodes can appear at the top level in a document");
             } else {
-                ok = false;
+                throw XProcException.dynamicError(1, "Document cannot have top level " + child.getNodeKind());
             }
         }
-
-        return ok;
     }
 
 }

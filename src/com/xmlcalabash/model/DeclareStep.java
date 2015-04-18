@@ -125,7 +125,7 @@ public class DeclareStep extends CompoundStep {
 
     public void declareStep(QName type, DeclareStep step) {
         if (declaredSteps.containsKey(type)) {
-            throw new XProcException(step, "Duplicate step type");
+            throw new XProcException(step, "Duplicate step type: " + type);
         } else {
             declaredSteps.put(type, step);
         }
@@ -209,7 +209,9 @@ public class DeclareStep extends CompoundStep {
 
         while (log != null && level == null) {
             log = log.getParent();
-            level = log.getLevel();
+            if (log != null) {
+                level = log.getLevel();
+            }
         }
 
         if (level == null) {

@@ -1,7 +1,6 @@
 package com.xmlcalabash.runtime;
 
 import com.xmlcalabash.core.XProcRunnable;
-import com.xmlcalabash.core.XProcStep;
 import net.sf.saxon.s9api.XdmNode;
 import net.sf.saxon.s9api.QName;
 import net.sf.saxon.s9api.SaxonApiException;
@@ -31,8 +30,8 @@ public abstract class XStep implements XProcRunnable
     protected XProcRuntime runtime = null;
     protected Step step = null;
     protected String name = null;
-    private Hashtable<String,XInput> inputs = new Hashtable<String,XInput> ();
-    private Hashtable<String,XOutput> outputs = new Hashtable<String,XOutput> ();
+    private Hashtable<String,XInput> xinputs = new Hashtable<String,XInput> ();
+    private Hashtable<String,XOutput> xoutputs = new Hashtable<String,XOutput> ();
     private Hashtable<QName, RuntimeValue> options = new Hashtable<QName, RuntimeValue> ();
     private Hashtable<String, Hashtable<QName, RuntimeValue>> parameters = new Hashtable<String, Hashtable<QName, RuntimeValue>> ();
     protected XCompoundStep parent = null;
@@ -73,31 +72,31 @@ public abstract class XStep implements XProcRunnable
 
     public void addInput(XInput input) {
         String port = input.getPort();
-        if (inputs.containsKey(port)) {
+        if (xinputs.containsKey(port)) {
             throw new XProcException(input.getNode(), "Attempt to add output '" + port + "' port to the same step twice.");
         }
-        inputs.put(port, input);
+        xinputs.put(port, input);
     }
 
     public void addOutput(XOutput output) {
         String port = output.getPort();
-        if (outputs.containsKey(port)) {
+        if (xoutputs.containsKey(port)) {
             throw new XProcException(output.getNode(), "Attempt to add output '" + port + "' port to the same step twice.");
         }
-        outputs.put(port, output);
+        xoutputs.put(port, output);
     }
 
     public XInput getInput(String port) {
-        if (inputs.containsKey(port)) {
-            return inputs.get(port);
+        if (xinputs.containsKey(port)) {
+            return xinputs.get(port);
         } else {
             throw new XProcException(step.getNode(), "Attempt to get non-existant input '" + port + "' port from step.");
         }
     }
 
     public XOutput getOutput(String port) {
-        if (outputs.containsKey(port)) {
-            return outputs.get(port);
+        if (xoutputs.containsKey(port)) {
+            return xoutputs.get(port);
         } else {
             if (XProcConstants.NS_XPROC.equals(step.getType().getNamespaceURI())
                     && step.getStep().getVersion() > 1.0) {
@@ -112,17 +111,27 @@ public abstract class XStep implements XProcRunnable
         Set<String> ports = getParameterPorts();
         int pportCount = 0;
         String pport = null;
+        String ppport = null;
         for (String port : ports) {
             pport = port;
             pportCount++;
+
+            Input pin = getStep().getInput(port);
+            if (pin.getPrimary()) {
+                ppport = port;
+            }
         }
 
         if (pportCount == 0) {
             throw new XProcException(step.getNode(), "Attempt to set parameter but there's no parameter port.");
         }
 
-        if (pportCount > 1) {
-            throw new XProcException(step.getNode(), "Attempt to set parameter w/o specifying a port (and there's more than one)");
+        if (ppport != null) {
+            pport = ppport;
+        } else {
+            if (pportCount > 1) {
+                throw new XProcException(step.getNode(), "Attempt to set parameter w/o specifying a port (and there's more than one)");
+            }
         }
 
         setParameter(pport, name, value);
@@ -133,6 +142,11 @@ public abstract class XStep implements XProcRunnable
         if (parameters.containsKey(port)) {
             pparams = parameters.get(port);
         } else {
+            XInput xinput = getInput(port); // Make sure there is one
+            Input input = getDeclareStep().getInput(port);
+            if (!input.getParameterInput()) {
+                throw new XProcException(step.getNode(), "Attempt to write parameters to non-parameter input port: " + port);
+            }
             pparams = new Hashtable<QName,RuntimeValue> ();
             parameters.put(port, pparams);
         }
@@ -162,9 +176,11 @@ public abstract class XStep implements XProcRunnable
     }
 
     public void setOption(QName name, RuntimeValue value) {
+        /* this causes an attempt to run the same pipeline twice to fail because the passedInOptions get set twice...
         if (options.containsKey(name)) {
             throw new XProcException(step.getNode(), "Duplicate option: " + name);
         }
+        */
         options.put(name, value);
     }
 
